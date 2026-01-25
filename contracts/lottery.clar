@@ -18,7 +18,7 @@
 (define-data-var round-length uint u10)
 (define-data-var game-round uint u1)
 (define-data-var pot-size uint u0)
-(define-data-var round-start-block uint stacks-block-height)
+(define-data-var round-start-block uint u0)
 (define-data-var current-ticket-id uint u0)
 
 ;; Maps
