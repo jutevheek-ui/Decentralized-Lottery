@@ -12,6 +12,7 @@
 (define-constant APP-ERR-NOT-WINNER (err u106))
 (define-constant APP-ERR-PRIZE-ALREADY-CLAIMED (err u107))
 (define-constant APP-ERR-INVALID-TICKET (err u108))
+(define-constant APP-ERR-BATCH-EMPTY (err u109))
 
 ;; Data Variables
 (define-data-var ticket-cost uint u100)
@@ -100,35 +101,45 @@
 
 ;; Public Functions
 
-(define-public (buy-ticket)
+(define-private (buy-ticket-internal (recipient principal))
     (let (
             (current-round (var-get game-round))
-            (cost (var-get ticket-cost))
-            (buyer tx-sender)
             (new-ticket-id (+ (var-get current-ticket-id) u1))
         )
-        ;; Assert that the transfer is successful
-        (try! (stx-transfer? cost buyer (as-contract tx-sender)))
-
-        ;; Map set for the new ticket
         (map-set tickets {
             round: current-round,
             id: new-ticket-id,
         }
-            buyer
+            recipient
         )
-
-        ;; Update global state
-        (var-set pot-size (+ (var-get pot-size) cost))
         (var-set current-ticket-id new-ticket-id)
-
         (print {
             event: "ticket-bought",
             round: current-round,
-            buyer: buyer,
+            buyer: recipient,
             ticket-id: new-ticket-id,
         })
-        (ok new-ticket-id)
+        new-ticket-id
+    )
+)
+
+(define-public (buy-ticket)
+    (let ((cost (var-get ticket-cost)))
+        (try! (stx-transfer? cost tx-sender (as-contract tx-sender)))
+        (var-set pot-size (+ (var-get pot-size) cost))
+        (ok (buy-ticket-internal tx-sender))
+    )
+)
+
+(define-public (buy-tickets-multi (recipients (list 50 principal)))
+    (let (
+            (amount (len recipients))
+            (total-cost (* amount (var-get ticket-cost)))
+        )
+        (asserts! (> amount u0) APP-ERR-BATCH-EMPTY)
+        (try! (stx-transfer? total-cost tx-sender (as-contract tx-sender)))
+        (var-set pot-size (+ (var-get pot-size) total-cost))
+        (ok (map buy-ticket-internal recipients))
     )
 )
 
@@ -192,16 +203,11 @@
             (pot (get pot round-data))
             (is-claimed (get is-claimed round-data))
         )
-        ;; Assert caller is winner
         (asserts! (is-eq tx-sender winner) APP-ERR-UNAUTHORIZED)
-
-        ;; Assert not already claimed
         (asserts! (not is-claimed) APP-ERR-PRIZE-ALREADY-CLAIMED)
 
-        ;; Transfer pot to winner
         (try! (as-contract (stx-transfer? pot tx-sender winner)))
 
-        ;; Update round state to claimed
         (map-set rounds round (merge round-data { is-claimed: true }))
 
         (print {
