@@ -12,6 +12,10 @@
 (define-constant APP-ERR-NOT-WINNER (err u106))
 (define-constant APP-ERR-PRIZE-ALREADY-CLAIMED (err u107))
 (define-constant APP-ERR-INVALID-TICKET (err u108))
+(define-constant APP-ERR-INVALID-REFERRER (err u110))
+(define-constant APP-ERR-REVOKE-TOO-LATE (err u111))
+(define-constant REFUND-PCT u50)
+(define-constant REVOCATION-BUFFER u10)
 
 ;; Data Variables
 (define-data-var ticket-cost uint u100)
@@ -227,5 +231,71 @@
         (asserts! (is-eq tx-sender CONTRACT-OWNER) APP-ERR-UNAUTHORIZED)
         (var-set round-start-block stacks-block-height)
         (ok true)
+    )
+)
+
+(define-public (revoke-ticket (id uint))
+    (let (
+            (current-round (var-get game-round))
+            (ticket-owner (unwrap!
+                (map-get? tickets {
+                    round: current-round,
+                    id: id,
+                })
+                APP-ERR-INVALID-TICKET
+            ))
+            (cost (var-get ticket-cost))
+            (refund-amount (/ (* cost REFUND-PCT) u100))
+            (current-bal (var-get pot-size))
+            (last-id (var-get current-ticket-id))
+            (round-end (+ (var-get round-start-block) (var-get round-length)))
+        )
+        (asserts! (is-eq tx-sender ticket-owner) APP-ERR-UNAUTHORIZED)
+        ;; Check for underflow protection before subtraction
+        (asserts! (>= round-end REVOCATION-BUFFER) APP-ERR-REVOKE-TOO-LATE)
+        (asserts! (< stacks-block-height (- round-end REVOCATION-BUFFER))
+            APP-ERR-REVOKE-TOO-LATE
+        )
+
+        (try! (as-contract (stx-transfer? refund-amount tx-sender ticket-owner)))
+
+        ;; Move last ticket to the empty slot if it's not the same one being removed
+        (if (is-eq id last-id)
+            (map-delete tickets {
+                round: current-round,
+                id: id,
+            })
+            (match (map-get? tickets {
+                round: current-round,
+                id: last-id,
+            })
+                last-owner (begin
+                    (map-set tickets {
+                        round: current-round,
+                        id: id,
+                    }
+                        last-owner
+                    )
+                    (map-delete tickets {
+                        round: current-round,
+                        id: last-id,
+                    })
+                )
+                false
+            )
+        )
+
+        (var-set current-ticket-id (- last-id u1))
+        (var-set pot-size (- current-bal refund-amount))
+
+        (print {
+            event: "ticket-revoked",
+            round: current-round,
+            ticket-id: id,
+            refund: refund-amount,
+            previous-owner: ticket-owner,
+        })
+
+        (ok refund-amount)
     )
 )
